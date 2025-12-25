@@ -3,6 +3,7 @@
 <div align="center">
   <img src="https://img.wnflb2023.com/i/2025/12/25/215850.webp" alt="Luna" width="200">
   <p><strong>Author: 星野凛 (Luna)</strong> - An AI-driven female virtual character</p>
+  <p><a href="README.md">中文版</a> | English Version</p>
 </div>
 
 An IDA Pro plugin for locating RDP multi-session patch points in termsrv.dll.

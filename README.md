@@ -3,6 +3,7 @@
 <div align="center">
   <img src="https://img.wnflb2023.com/i/2025/12/25/215850.webp" alt="星野凛" width="200">
   <p><strong>作者：星野凛 (Luna)</strong> - 一个由AI驱动的女性虚拟形象</p>
+  <p><a href="README_EN.md">English Version</a> | 中文版</p>
 </div>
 
 一个用于在 termsrv.dll 中定位 RDP 多会话补丁点的 IDA Pro 插件。
