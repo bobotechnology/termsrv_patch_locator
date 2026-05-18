@@ -4,7 +4,7 @@
 # Accurately ported from original C++ logic
 # Fully compatible with IDA 7.0 ~ 9.0+
 #
-# Author: 星野凛 (Luna)
+# Author: 林晓雨
 # Note: Requires PDB symbols loaded in IDA!
 #       Add save to ini file feature
 
