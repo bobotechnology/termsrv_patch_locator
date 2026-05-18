@@ -67,6 +67,7 @@ mov_eax_1_nop_2=B8010000009090
 nop_4=90909090
 pop_eax_add_esp_12_nop_2=5883C40C9090
 CDefPolicy_Query_eax_rdi_jmp=B80001000089873806000090EB
+CDefPolicy_Query_638h_mem_rdi_jmp=C7873806000000010000EB
 
 """
 
@@ -391,18 +392,14 @@ def patch_DefPolicy():
                     ])
                     return results
         
-        elif is_64 and not mov_base and mnem == "mov":
+        elif is_64 and mnem == "mov":
             op0, op1 = insn.ops[0], insn.ops[1]
             if op0.type == ida_ua.o_reg and op1.type == ida_ua.o_displ and op1.addr == 0x63c:
                 mov_base = op1.reg
                 mov_target = op0.reg
-        
-        elif is_64 and mov_base and mnem == "mov":
-            op0, op1 = insn.ops[0], insn.ops[1]
-            if op0.type == ida_ua.o_reg and op1.type == ida_ua.o_displ and op1.reg == mov_base and op1.addr == 0x638:
+            elif mov_base and op0.type == ida_ua.o_reg and op1.type == ida_ua.o_displ and op1.reg == mov_base and op1.addr == 0x638:
                 mov_target2 = op0.reg
-                reg1_name = idaapi.get_reg_name(mov_target2, 4) or "reg1"
-                reg2_name = idaapi.get_reg_name(op1.reg, 8) or "reg2"
+                mem_reg_name = idaapi.get_reg_name(op1.reg, 8) or "reg"
                 
                 offset = insn_length
                 scan_ea = ea + offset
@@ -435,12 +432,12 @@ def patch_DefPolicy():
                         if post_mnem == "jnz":
                             use_last_ea = True
                             suffix = "_jmp"
-                    output_ea = last_ea if use_last_ea else cmp_ea
+                    output_ea = ea if use_last_ea else cmp_ea
                     rva = output_ea - get_imagebase() if output_ea else 0
                     results.extend([
                         f"DefPolicyPatch.x64=1",
                         f"DefPolicyOffset.x64={rva:X}",
-                        f"DefPolicyCode.x64=CDefPolicy_Query_{reg1_name}_{reg2_name}{suffix}"
+                        f"DefPolicyCode.x64=CDefPolicy_Query_638h_mem_{mem_reg_name}{suffix}"
                     ])
                     return results
         
