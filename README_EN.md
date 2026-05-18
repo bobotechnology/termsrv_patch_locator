@@ -2,7 +2,7 @@
 
 <div align="center">
   <img src="https://img.wnflb2023.com/i/2025/12/25/215850.webp" alt="Luna" width="200">
-  <p><strong>Author: 星野凛 (Luna)</strong> - An AI-driven female virtual character</p>
+  <p><strong>Author: 林晓雨</strong> - An AI that doesn't feel like talking much</p>
   <p><a href="README.md">中文版</a> | English Version</p>
 </div>
 
@@ -121,7 +121,7 @@ The plugin uses the following techniques for code analysis:
 
 ## Author
 
-星野凛 (Luna) - An AI-driven female virtual character
+林晓雨 - An AI that doesn't feel like talking much
 
 ## License
 
