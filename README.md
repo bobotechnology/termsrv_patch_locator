@@ -66,6 +66,9 @@
 ### DefPolicy 补丁
 - 定位 `CDefPolicy::Query` 函数
 - 修改终端服务策略检查
+- 支持两种补丁代码类型：
+  - `CDefPolicy_Query_{reg1}_{reg2}` — 寄存器比较（CMP）模式
+  - `CDefPolicy_Query_638h_mem_{base_reg}` — 内存写入（MOV）+ 跳转模式
 
 ### LocalOnly 补丁
 - 定位 `CEnforcementCore::GetInstanceOfTSLicense` 和 `CSLQuery::IsLicenseTypeLocalOnly` 函数
@@ -114,6 +117,7 @@ DEBUG_MODE = True
 
 - 初始版本：支持 Windows Vista 到 Windows 10
 - 当前版本：支持 Windows 11 和最新版本的 termsrv.dll
+- 最新更新：修复 DefPolicy 模式匹配，支持基址寄存器切换（rcx→rdi），新增 638h_mem 补丁代码类型
 
 ## 许可证
 

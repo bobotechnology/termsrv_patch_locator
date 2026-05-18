@@ -66,6 +66,9 @@ The generated INI file contains:
 ### DefPolicy Patch
 - Locates `CDefPolicy::Query` function
 - Modifies terminal service policy checks
+- Supports two patch code types:
+  - `CDefPolicy_Query_{reg1}_{reg2}` — register-based compare (CMP) pattern
+  - `CDefPolicy_Query_638h_mem_{base_reg}` — memory write (MOV) + jump pattern
 
 ### LocalOnly Patch
 - Locates `CEnforcementCore::GetInstanceOfTSLicense` and `CSLQuery::IsLicenseTypeLocalOnly` functions
@@ -114,6 +117,7 @@ The plugin uses the following techniques for code analysis:
 
 - Initial version: Support for Windows Vista to Windows 10
 - Current version: Support for Windows 11 and latest versions of termsrv.dll
+- Latest: Fixed DefPolicy pattern matching to support base register switching (rcx→rdi), added 638h_mem patch code type
 
 ## Author
 
