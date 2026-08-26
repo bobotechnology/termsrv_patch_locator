@@ -88,6 +88,33 @@ class LocalOnlyTests(unittest.TestCase):
         match = locate_local_only(instructions, "x64", BASE, BASE + 0x900)
         self.assertEqual((match.offset, match.code), (0x50F, "jmpshort"))
 
+    def test_call_thunk_target_is_accepted(self):
+        instructions = [
+            insn(0x580, 5, "call", near(BASE + 0x980)),
+            insn(0x585, 2, "test", reg("eax"), reg("eax")),
+            insn(0x587, 2, "js", near(BASE + 0x5A0)),
+            insn(0x589, 3, "cmp", reg("eax"), imm(1)),
+            insn(0x58C, 2, "jz", near(BASE + 0x5A0)),
+            insn(0x5A0, 1, "ret"),
+        ]
+        match = locate_local_only(
+            instructions, "x64", BASE, {BASE + 0x900, BASE + 0x980}
+        )
+        self.assertEqual((match.offset, match.code), (0x58C, "jmpshort"))
+
+    def test_pattern_after_first_256_bytes(self):
+        instructions = [insn(offset, 1, "nop") for offset in range(0x700, 0x810)]
+        instructions.extend([
+            insn(0x810, 5, "call", near(BASE + 0x900)),
+            insn(0x815, 2, "test", reg("eax"), reg("eax")),
+            insn(0x817, 2, "js", near(BASE + 0x830)),
+            insn(0x819, 3, "cmp", reg("eax"), imm(0)),
+            insn(0x81C, 2, "jz", near(BASE + 0x830)),
+            insn(0x830, 1, "ret"),
+        ])
+        match = locate_local_only(instructions, "x64", BASE, BASE + 0x900)
+        self.assertEqual((match.offset, match.code), (0x81C, "jmpshort"))
+
     def test_jns_layout(self):
         instructions = [
             insn(0x600, 5, "call", near(BASE + 0x900)),

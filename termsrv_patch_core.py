@@ -6,7 +6,7 @@ remaining independent from IDA, which makes the behavior unit-testable.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -165,13 +165,18 @@ def locate_local_only(
     instructions: Sequence[Instruction],
     arch: str,
     image_base: int,
-    license_check_target: int,
+    license_check_target: Union[int, Set[int]],
 ) -> Optional[PatchMatch]:
     """Locate LocalOnly and handle the distinct JS and JNS control-flow layouts."""
+    targets = (
+        license_check_target
+        if isinstance(license_check_target, set)
+        else {license_check_target}
+    )
     by_ea: Dict[int, int] = {insn.ea: index for index, insn in enumerate(instructions)}
 
     for call_index, call in enumerate(instructions):
-        if call.mnemonic != "call" or call.operand(0).target != license_check_target:
+        if call.mnemonic != "call" or call.operand(0).target not in targets:
             continue
 
         index = call_index + 1

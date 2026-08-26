@@ -51,11 +51,12 @@ git clone https://github.com/bobotechnology/termsrv_patch_locator.git
 cd termsrv_patch_locator
 ```
 
-Copy both files below into an IDA `plugins` directory. They must remain in the same directory:
+Copy all three files below into an IDA `plugins` directory. They must remain in the same directory:
 
 ```text
 termsrv_patch_locator.py
 termsrv_patch_core.py
+termsrv_patch_output.py
 ```
 
 Common plugin directory examples:
@@ -144,6 +145,7 @@ The project consists of two primary modules:
 |---|---|
 | `termsrv_patch_locator.py` | IDA plugin entry point, symbol lookup, instruction adapter, version detection, and INI output |
 | `termsrv_patch_core.py` | IDA-independent instruction model and patch matchers |
+| `termsrv_patch_output.py` | Version-section field ordering and aligned SLInit formatting |
 
 This design keeps disassembly and symbol resolution in IDA while allowing the matching behavior to be regression-tested in a regular Python environment.
 
@@ -173,7 +175,7 @@ python -m unittest discover -s tests -v
 Run syntax checks:
 
 ```powershell
-python -m py_compile termsrv_patch_core.py termsrv_patch_locator.py tests/test_patch_core.py
+python -m py_compile termsrv_patch_core.py termsrv_patch_output.py termsrv_patch_locator.py tests/test_patch_core.py tests/test_patch_output.py
 ```
 
 The tests currently cover:
@@ -189,7 +191,7 @@ The tests currently cover:
 
 ### The plugin does not appear in the menu
 
-Make sure both Python files are in an IDA plugin search directory. Check the IDA Output window for import errors. Copying only `termsrv_patch_locator.py` will fail because `termsrv_patch_core.py` is required.
+Make sure all three Python files are in an IDA plugin search directory. Check the IDA Output window for import errors. Missing either `termsrv_patch_core.py` or `termsrv_patch_output.py` will prevent the plugin from loading.
 
 ### `memset not found`
 

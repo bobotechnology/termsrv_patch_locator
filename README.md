@@ -51,11 +51,12 @@ git clone https://github.com/bobotechnology/termsrv_patch_locator.git
 cd termsrv_patch_locator
 ```
 
-将以下两个文件复制到 IDA 的 `plugins` 目录，且保持它们位于同一目录：
+将以下三个文件复制到 IDA 的 `plugins` 目录，且保持它们位于同一目录：
 
 ```text
 termsrv_patch_locator.py
 termsrv_patch_core.py
+termsrv_patch_output.py
 ```
 
 常见插件目录示例：
@@ -144,6 +145,7 @@ IDA 数据库
 |---|---|
 | `termsrv_patch_locator.py` | IDA 插件入口、符号查找、指令适配、版本读取和 INI 输出 |
 | `termsrv_patch_core.py` | 与 IDA 解耦的指令模型，以及各类补丁匹配器 |
+| `termsrv_patch_output.py` | 版本段字段顺序和 SLInit 对齐格式 |
 
 这种结构使匹配逻辑可以在普通 Python 环境中回归测试，同时保留 IDA 负责反汇编和符号解析的优势。
 
@@ -173,7 +175,7 @@ python -m unittest discover -s tests -v
 运行语法检查：
 
 ```powershell
-python -m py_compile termsrv_patch_core.py termsrv_patch_locator.py tests/test_patch_core.py
+python -m py_compile termsrv_patch_core.py termsrv_patch_output.py termsrv_patch_locator.py tests/test_patch_core.py tests/test_patch_output.py
 ```
 
 测试覆盖当前核心匹配路径，包括：
@@ -189,7 +191,7 @@ python -m py_compile termsrv_patch_core.py termsrv_patch_locator.py tests/test_p
 
 ### 插件没有出现在菜单中
 
-确认两个 Python 文件均位于 IDA 的插件搜索目录中，并检查 IDA 输出窗口是否出现模块导入异常。只复制 `termsrv_patch_locator.py` 会因缺少 `termsrv_patch_core.py` 而加载失败。
+确认三个 Python 文件均位于 IDA 的插件搜索目录中，并检查 IDA 输出窗口是否出现模块导入异常。缺少 `termsrv_patch_core.py` 或 `termsrv_patch_output.py` 都会导致插件加载失败。
 
 ### 提示 `memset not found`
 

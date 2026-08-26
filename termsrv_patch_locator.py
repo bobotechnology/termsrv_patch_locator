@@ -24,6 +24,12 @@ from termsrv_patch_core import (
     locate_single_user,
     uses_win8_cp_policy,
 )
+from termsrv_patch_output import (
+    format_patch_block,
+    format_slinit_hook,
+    format_slinit_section,
+    join_blocks,
+)
 
 
 PLUGIN_NAME = "Termsrv RDP Patch Locator"
@@ -34,23 +40,6 @@ Updated=2021-06-23
 LogFile=\\rdpwrap.txt
 SLPolicyHookNT60=1
 SLPolicyHookNT61=1
-
-[SLPolicy]
-TerminalServices-RemoteConnectionManager-AllowRemoteConnections=1
-TerminalServices-RemoteConnectionManager-AllowMultipleSessions=1
-TerminalServices-RemoteConnectionManager-AllowAppServerMode=1
-TerminalServices-RemoteConnectionManager-AllowMultimon=1
-TerminalServices-RemoteConnectionManager-MaxUserSessions=0
-TerminalServices-RemoteConnectionManager-ce0ad219-4670-4988-98fb-89b14c2f072b-MaxSessions=0
-TerminalServices-RemoteConnectionManager-45344fe7-00e6-4ac6-9f01-d01fd4ffadfb-MaxSessions=2
-TerminalServices-RDP-7-Advanced-Compression-Allowed=1
-TerminalServices-RemoteConnectionManager-45344fe7-00e6-4ac6-9f01-d01fd4ffadfb-LocalOnly=0
-TerminalServices-RemoteConnectionManager-8dc86f1d-9969-4379-91c1-06fe1dc60575-MaxSessions=1000
-TerminalServices-DeviceRedirection-Licenses-TSEasyPrintAllowed=1
-TerminalServices-DeviceRedirection-Licenses-PnpRedirectionAllowed=1
-TerminalServices-DeviceRedirection-Licenses-TSMFPluginAllowed=1
-TerminalServices-RemoteConnectionManager-UiEffects-DWMRemotingAllowed=1
-TerminalServices-RemoteApplications-ClientSku-RAILAllowed=1
 
 [PatchCodes]
 nop=90
@@ -77,17 +66,44 @@ pop_eax_add_esp_12_nop_1=5883C40C90
 pop_eax_add_esp_12_nop_2=5883C40C9090
 pop_eax_add_esp_12_nop_3=5883C40C909090
 
+[SLInit]
+bServerSku=1
+bRemoteConnAllowed=1
+bFUSEnabled=1
+bAppServerAllowed=1
+bMultimonAllowed=1
+lMaxUserSessions=0
+ulMaxDebugSessions=0
+bInitialized=1
+
+[SLPolicy]
+TerminalServices-RemoteConnectionManager-AllowRemoteConnections=1
+TerminalServices-RemoteConnectionManager-AllowMultipleSessions=1
+TerminalServices-RemoteConnectionManager-AllowAppServerMode=1
+TerminalServices-RemoteConnectionManager-AllowMultimon=1
+TerminalServices-RemoteConnectionManager-MaxUserSessions=0
+TerminalServices-RemoteConnectionManager-ce0ad219-4670-4988-98fb-89b14c2f072b-MaxSessions=0
+TerminalServices-RemoteConnectionManager-45344fe7-00e6-4ac6-9f01-d01fd4ffadfb-MaxSessions=2
+TerminalServices-RDP-7-Advanced-Compression-Allowed=1
+TerminalServices-RemoteConnectionManager-45344fe7-00e6-4ac6-9f01-d01fd4ffadfb-LocalOnly=0
+TerminalServices-RemoteConnectionManager-8dc86f1d-9969-4379-91c1-06fe1dc60575-MaxSessions=1000
+TerminalServices-DeviceRedirection-Licenses-TSEasyPrintAllowed=1
+TerminalServices-DeviceRedirection-Licenses-PnpRedirectionAllowed=1
+TerminalServices-DeviceRedirection-Licenses-TSMFPluginAllowed=1
+TerminalServices-RemoteConnectionManager-UiEffects-DWMRemotingAllowed=1
+TerminalServices-RemoteApplications-ClientSku-RAILAllowed=1
+
 """
 
 SLINIT_VARS = (
-    "bServerSku",
-    "bRemoteConnAllowed",
-    "bFUSEnabled",
-    "bAppServerAllowed",
-    "bMultimonAllowed",
-    "lMaxUserSessions",
-    "ulMaxDebugSessions",
     "bInitialized",
+    "bServerSku",
+    "lMaxUserSessions",
+    "bAppServerAllowed",
+    "bRemoteConnAllowed",
+    "bMultimonAllowed",
+    "ulMaxDebugSessions",
+    "bFUSEnabled",
 )
 
 
@@ -118,17 +134,28 @@ def _display_name(name):
     return demangled or name
 
 
-def find_func_ea(*patterns):
+def find_func_eas(*patterns):
     lowered = tuple(pattern.lower() for pattern in patterns)
+    matches = []
+    seen = set()
     for ea in idautils.Functions():
         name = idc.get_func_name(ea)
         if not name:
             continue
         display = _display_name(name).lower()
-        if any(fnmatch.fnmatch(display, "*" + pattern + "*") for pattern in lowered):
+        if (
+            ea not in seen
+            and any(fnmatch.fnmatch(display, "*" + pattern + "*") for pattern in lowered)
+        ):
             debug_log("Function {} at 0x{:X}".format(_display_name(name), ea))
-            return ea
-    return None
+            matches.append(ea)
+            seen.add(ea)
+    return matches
+
+
+def find_func_ea(*patterns):
+    matches = find_func_eas(*patterns)
+    return matches[0] if matches else None
 
 
 def find_name_ea(*patterns):
@@ -257,16 +284,24 @@ def patch_def_policy():
 
 
 def patch_local_only():
-    caller = find_func_ea("cenforcementcore::getinstanceoftslicense")
-    target = find_func_ea(
+    callers = find_func_eas("cenforcementcore::getinstanceoftslicense")
+    targets = find_func_eas(
         "cslquery::islicensetypelocalonly", "cslquery::isterminaltypelocalonly"
     )
-    if caller is None or target is None:
+    if not callers or not targets:
         return ["ERROR: LocalOnly functions not found"]
-    match = locate_local_only(
-        collect_function(caller, 256), get_arch(), get_imagebase(), target
-    )
-    return match.ini_lines(get_arch()) if match else ["ERROR: LocalOnlyPatch pattern not found"]
+
+    target_candidates = set()
+    for target in targets:
+        target_candidates.update(_call_target_candidates(target))
+
+    for caller in callers:
+        match = locate_local_only(
+            collect_function(caller), get_arch(), get_imagebase(), target_candidates
+        )
+        if match:
+            return match.ini_lines(get_arch())
+    return ["ERROR: LocalOnlyPatch pattern not found"]
 
 
 def get_file_version(file_path=None):
@@ -318,62 +353,65 @@ def analyze_termsrv():
 
     arch = get_arch()
     version_text = ".".join(str(part) for part in version)
-    results = ["[{}]".format(version_text)]
-    print(results[0])
-
-    _append_and_print(patch_single_user(), results)
-    _append_and_print(patch_def_policy(), results)
+    raw_single_user = patch_single_user()
+    raw_def_policy = patch_def_policy()
 
     if version[:2] <= (6, 1):
+        results = ["[{}]".format(version_text)]
+        results.extend(join_blocks([
+            format_patch_block("SingleUser", arch, raw_single_user),
+            format_patch_block("DefPolicy", arch, raw_def_policy),
+        ]))
+        _append_and_print(results, [])
         save_results_to_ini(version_text, results)
         return
 
     if version[:2] == (6, 2):
+        blocks = [
+            format_patch_block("SingleUser", arch, raw_single_user),
+            format_patch_block("DefPolicy", arch, raw_def_policy),
+        ]
         ea = find_func_ea("slgetwindowsinformationdwordwrapper")
         if ea is None:
-            _append_and_print(["ERROR: SLGetWindowsInformationDWORDWrapper not found"], results)
+            blocks.append(["ERROR: SLGetWindowsInformationDWORDWrapper not found"])
         else:
             function_name = "New_Win8SL_CP" if uses_win8_cp_policy(
                 collect_function(ea, 128), arch
             ) else "New_Win8SL"
-            _append_and_print([
+            blocks.append([
                 "SLPolicyInternal.{}=1".format(arch),
                 "SLPolicyOffset.{}={:X}".format(arch, ea - get_imagebase()),
                 "SLPolicyFunc.{}={}".format(arch, function_name),
-            ], results)
+            ])
+        results = ["[{}]".format(version_text)] + join_blocks(blocks)
+        _append_and_print(results, [])
         save_results_to_ini(version_text, results)
         return
 
-    _append_and_print(patch_local_only(), results)
+    raw_local_only = patch_local_only()
     init_ea = find_func_ea("cslquery::initialize")
+    version_blocks = [
+        format_patch_block("LocalOnly", arch, raw_local_only),
+        format_patch_block("SingleUser", arch, raw_single_user),
+        format_patch_block("DefPolicy", arch, raw_def_policy),
+    ]
+
     if init_ea is None:
-        _append_and_print(["ERROR: CSLQuery::Initialize not found"], results)
+        version_blocks.append(["ERROR: CSLQuery::Initialize not found"])
+        results = ["[{}]".format(version_text)] + join_blocks(version_blocks)
+        _append_and_print(results, [])
         save_results_to_ini(version_text, results)
         return
 
-    _append_and_print([
-        "SLInitHook.{}=1".format(arch),
-        "SLInitOffset.{}={:X}".format(arch, init_ea - get_imagebase()),
-        "SLInitFunc.{}=New_CSLQuery_Initialize".format(arch),
-        "",
-        "[SLInit]",
-        "bServerSku=1",
-        "bRemoteConnAllowed=1",
-        "bFUSEnabled=1",
-        "bAppServerAllowed=1",
-        "bMultimonAllowed=1",
-        "lMaxUserSessions=0",
-        "ulMaxDebugSessions=0",
-        "bInitialized=1",
-        "",
-        "[{}-SLInit]".format(version_text),
-    ], results)
-
+    version_blocks.append(format_slinit_hook(arch, init_ea - get_imagebase()))
+    addresses = {}
     for name in SLINIT_VARS:
         ea = find_var_ea(name)
-        line = "{}.{}={:X}".format(name, arch, ea - get_imagebase()) if ea is not None else "ERROR: {} not found".format(name)
-        _append_and_print([line], results)
+        addresses[name] = ea - get_imagebase() if ea is not None else None
 
+    results = ["[{}]".format(version_text)] + join_blocks(version_blocks)
+    results.extend([""] + format_slinit_section(version_text, arch, addresses))
+    _append_and_print(results, [])
     save_results_to_ini(version_text, results)
 
 
