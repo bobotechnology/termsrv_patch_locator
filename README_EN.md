@@ -1,146 +1,248 @@
-# Termsrv.dll RDP Multi-session Patch Locator
-
 <div align="center">
-  <img src="https://img.wnflb2023.com/i/2025/12/25/215850.webp" alt="Luna" width="200">
-  <p><strong>Author: 林晓雨</strong> - An AI that doesn't feel like talking much</p>
-  <p><a href="README.md">中文版</a> | English Version</p>
+
+# Termsrv Patch Locator
+
+**Automatically locate RDP Wrapper patch offsets in `termsrv.dll` with IDA Pro**
+
+[![License](https://img.shields.io/github/license/bobotechnology/termsrv_patch_locator?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![IDA Pro](https://img.shields.io/badge/IDA%20Pro-7.0--9.x-5C2D91?style=flat-square)](https://hex-rays.com/ida-pro)
+[![Architecture](https://img.shields.io/badge/arch-x86%20%7C%20x64-informational?style=flat-square)](#compatibility)
+
+[简体中文](README.md) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Troubleshooting](#troubleshooting)
+
 </div>
 
-An IDA Pro plugin for locating RDP multi-session patch points in termsrv.dll.
+---
 
-## Introduction
+Termsrv Patch Locator is an IDAPython plugin for reverse engineering and RDP Wrapper configuration maintenance. It analyzes a `termsrv.dll` database with matching PDB symbols, locates the patch points required by RDP Wrapper, and generates a version section suitable for `rdpwrap.ini`.
 
-This plugin automatically analyzes the termsrv.dll file in Windows systems and locates key code locations that need to be modified to enable RDP multi-user simultaneous connections. It is fully compatible with IDA Pro 7.0 to 9.0+ and supports both x86 and x64 architectures.
+The matching logic follows the x86/x64 implementation in [llccd/RDPWrapOffsetFinder](https://github.com/llccd/RDPWrapOffsetFinder) and is separated into a pure Python core that can be tested without IDA.
 
-## Key Features
+> [!IMPORTANT]
+> This tool **does not modify** `termsrv.dll`. It only analyzes offsets and generates an INI file. Validate the generated configuration against the exact target DLL before deployment.
 
-- **Automatic Analysis**: Automatically identify termsrv.dll version and architecture
-- **Multiple Patch Location**: Supports SingleUser, DefPolicy, and LocalOnly patch point location
-- **Configuration Generation**: Automatically generate INI configuration files for use with RDP Wrapper project
-- **Cross-Version Support**: Supports various versions from Windows Vista to Windows 11
-- **Architecture Compatibility**: Supports both 32-bit (x86) and 64-bit (x64) systems
+## Features
 
-## Requirements
+- **Automatic target detection** — reads the DLL version and identifies x86 or x64.
+- **Core patch location** — supports SingleUser, DefPolicy, LocalOnly, SLPolicy, and SLInit.
+- **RDP Wrapper configuration output** — emits patch RVAs, patch code names, and SLInit variable addresses.
+- **Multiple instruction layouts** — handles DefPolicy register changes and both `js`/`jns` LocalOnly control-flow forms.
+- **Bounded scanning** — limits decoding to target functions and reference implementation scan lengths.
+- **Testable matching core** — runs regression tests without launching IDA.
+- **IDA API compatibility** — uses compatible IDAPython paths for IDA Pro 7.x, 8.x, and 9.x.
 
-- IDA Pro 7.0 ~ 9.0+
-- termsrv.dll with PDB symbols loaded
-- Python 3.x environment
+## Quick Start
 
-## Installation
+### Requirements
 
-1. Copy the `termsrv_patch_locator.py` file to the IDA Pro plugins directory
-2. Load the termsrv.dll file in IDA Pro
-3. Ensure PDB symbols are loaded (via File → Load file → PDB file...)
-4. Run the plugin using the menu or shortcut `Ctrl+Alt+R`
+- IDA Pro 7.0–9.x
+- The Python 3 environment bundled with IDA
+- A target `termsrv.dll`
+- PDB symbols that exactly match the DLL
+- An x86 or x64 Windows target
 
-## Usage
+### Installation
 
-1. Open the termsrv.dll file in IDA Pro
-2. Ensure the corresponding PDB symbols file is loaded
-3. Use the shortcut `Ctrl+Alt+R` or run "Termsrv RDP Patch Locator" from the plugin menu
-4. The plugin will automatically analyze the file and display results in the output window
-5. After analysis is complete, a file save dialog will pop up - select the save location
-6. The plugin will generate an INI file containing patch information
+Clone the repository:
 
-## Output
+```powershell
+git clone https://github.com/bobotechnology/termsrv_patch_locator.git
+cd termsrv_patch_locator
+```
 
-The plugin will display the following information in the output window:
+Copy both files below into an IDA `plugins` directory. They must remain in the same directory:
 
-- File version information (e.g., `[6.3.9600.17415]`)
-- Locations and codes for various patch points
-- Error messages (if certain patch points are not found)
+```text
+termsrv_patch_locator.py
+termsrv_patch_core.py
+```
 
-The generated INI file contains:
+Common plugin directory examples:
 
-- Basic configuration template
-- Patch point offset addresses
-- Patch codes
-- SLInit variable addresses (for newer versions)
+```text
+C:\Program Files\IDA Professional 9.0\plugins\
+%APPDATA%\Hex-Rays\IDA Pro\plugins\
+```
 
-## Supported Patch Types
+Restart IDA Pro. The plugin should appear as **Termsrv RDP Patch Locator**.
 
-### SingleUser Patch
-- Locates `CSessionArbitrationHelper::IsSingleSessionPerUserEnabled` or `CUtils::IsSingleSessionPerUser` functions
-- Modifies single-user session restrictions
+### Usage
 
-### DefPolicy Patch
-- Locates `CDefPolicy::Query` function
-- Modifies terminal service policy checks
-- Supports two patch code types:
-  - `CDefPolicy_Query_{reg1}_{reg2}` — register-based compare (CMP) pattern
-  - `CDefPolicy_Query_638h_mem_{base_reg}` — memory write (MOV) + jump pattern
+1. Open the target `termsrv.dll` in IDA Pro.
+2. Wait for automatic analysis to finish.
+3. Confirm that matching PDB symbols are loaded and names such as `CDefPolicy::Query` are visible.
+4. Press `Ctrl+Alt+R`, or run **Termsrv RDP Patch Locator** from the plugin menu.
+5. Review the results in the Output window.
+6. Select an output directory when prompted. The plugin will write an autogenerated INI file.
 
-### LocalOnly Patch
-- Locates `CEnforcementCore::GetInstanceOfTSLicense` and `CSLQuery::IsLicenseTypeLocalOnly` functions
-- Modifies local license restrictions
+Output filename format:
 
-### SLInit Patch (for Windows 8.1+)
-- Locates `CSLQuery::Initialize` function and related variables
-- Modifies terminal service initialization settings
+```text
+<version>-autogenerated_<architecture>.ini
+```
+
+Example:
+
+```text
+10.0.26100.3912-autogenerated_x64.ini
+```
+
+## Example Output
+
+```ini
+[10.0.26100.3912]
+SingleUserPatch.x64=1
+SingleUserOffset.x64=1A2B3
+SingleUserCode.x64=nop_4
+DefPolicyPatch.x64=1
+DefPolicyOffset.x64=2B3C4
+DefPolicyCode.x64=CDefPolicy_Query_r9d_rdi_jmp
+LocalOnlyPatch.x64=1
+LocalOnlyOffset.x64=3C4D5
+LocalOnlyCode.x64=jmpshort
+SLInitHook.x64=1
+SLInitOffset.x64=4D5E6
+SLInitFunc.x64=New_CSLQuery_Initialize
+```
+
+All addresses are RVAs relative to the image base. If a symbol or pattern cannot be found, the output retains an explicit `ERROR:` line to identify the failed stage.
+
+## Supported Patches
+
+| Patch | Target function or data | Scope |
+|---|---|---|
+| SingleUser | `CSessionArbitrationHelper::IsSingleSessionPerUserEnabled` / `CUtils::IsSingleSessionPerUser` | x86, x64 |
+| DefPolicy | `CDefPolicy::Query` | x86, x64 |
+| LocalOnly | `CEnforcementCore::GetInstanceOfTSLicense` plus a LocalOnly query function | Windows 8.1+ |
+| SLPolicy | `SLGetWindowsInformationDWORDWrapper` | Windows 8 / 6.2 |
+| SLInit | `CSLQuery::Initialize` and related globals | Windows 8.1+ |
+
+DefPolicy supports direct comparisons and the `0x63C`/`0x638` register-pair layout, producing code names such as:
+
+```ini
+CDefPolicy_Query_eax_rdi
+CDefPolicy_Query_eax_rcx_jmp
+CDefPolicy_Query_r9d_rdi_jmp
+```
+
+## How It Works
+
+```text
+IDA database
+   │
+   ├─ Read the termsrv.dll version and architecture
+   ├─ Locate target functions and variables through PDB symbols
+   ├─ Convert IDA instructions into an independent instruction model
+   ├─ Run patch matchers inside bounded function ranges
+   └─ Collect RVAs and code names, then generate an INI file
+```
+
+The project consists of two primary modules:
+
+| File | Responsibility |
+|---|---|
+| `termsrv_patch_locator.py` | IDA plugin entry point, symbol lookup, instruction adapter, version detection, and INI output |
+| `termsrv_patch_core.py` | IDA-independent instruction model and patch matchers |
+
+This design keeps disassembly and symbol resolution in IDA while allowing the matching behavior to be regression-tested in a regular Python environment.
+
+## Compatibility
+
+| Target | Status |
+|---|---|
+| IDA Pro 7.x | Supported |
+| IDA Pro 8.x | Supported |
+| IDA Pro 9.x | Supported |
+| x86 `termsrv.dll` | Supported |
+| x64 `termsrv.dll` | Supported |
+| ARM64 | Not yet supported |
+| Analysis without PDB symbols | Not yet supported |
+| Automatic DLL modification | Not provided |
+
+ARM64 and symbol-free scanning from the reference project have not been ported. The current release depends on function and global-variable symbols from a matching PDB.
+
+## Development and Testing
+
+Run the regression suite:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Run syntax checks:
+
+```powershell
+python -m py_compile termsrv_patch_core.py termsrv_patch_locator.py tests/test_patch_core.py
+```
+
+The tests currently cover:
+
+- x64 `VerifyVersionInfoW` SingleUser layout
+- x86 SingleUser `cmp` fallback
+- direct DefPolicy comparison
+- DefPolicy `0x63C`/`0x638` register-pair layout
+- LocalOnly `js` and `jns` control flow
+- Windows 8 SLPolicy CP layout
 
 ## Troubleshooting
 
-### Common Issues
+### The plugin does not appear in the menu
 
-1. **"memset not found" error**
-   - Ensure PDB symbols are loaded
-   - Check if the termsrv.dll version is supported
+Make sure both Python files are in an IDA plugin search directory. Check the IDA Output window for import errors. Copying only `termsrv_patch_locator.py` will fail because `termsrv_patch_core.py` is required.
 
-2. **"CDefPolicy::Query not found" error**
-   - Some newer versions may use different function names
-   - Try updating the plugin or manually locate related functions
+### `memset not found`
 
-3. **Generated INI file is incomplete**
-   - Check error messages in the output window
-   - Confirm all necessary functions and variables are found
+This usually means the PDB is missing, does not match the DLL, or IDA analysis is incomplete. Verify the complete DLL version and reload the corresponding symbols.
 
-### Debug Mode
+### `CDefPolicy::Query not found`
 
-To enable debug mode, set the `DEBUG_MODE` variable to `True` in the script:
+Search for the name in the Names or Functions window. If it is absent, the PDB may not match or the DLL may use an unsupported symbol or code layout.
+
+### The generated INI contains `ERROR:` lines
+
+The plugin preserves missing items instead of silently producing an apparently complete configuration. Do not deploy a configuration with critical location errors. Open an Issue with the DLL version, architecture, IDA version, and complete plugin output.
+
+### Enable debug logging
+
+Edit `termsrv_patch_locator.py`:
 
 ```python
 DEBUG_MODE = True
 ```
 
-This will output more detailed debug information to help diagnose problems.
-
-## Technical Details
-
-The plugin uses the following techniques for code analysis:
-
-- Function name pattern matching
-- Instruction sequence recognition
-- Register operation analysis
-- Memory access pattern detection
-
-## Version History
-
-- Initial version: Support for Windows Vista to Windows 10
-- Current version: Support for Windows 11 and latest versions of termsrv.dll
-- Latest: Fixed DefPolicy pattern matching to support base register switching (rcx→rdi), added 638h_mem patch code type
-
-## Author
-
-林晓雨 - An AI that doesn't feel like talking much
-
-## License
-
-This project is open source under the MIT License, see the [LICENSE](LICENSE) file for details.
+Reload the plugin and run it again to receive additional diagnostics in the IDA Output window.
 
 ## Contributing
 
-Bug reports and feature requests are welcome. If you want to contribute code, please follow these steps:
+Issues and pull requests are welcome, especially for:
 
-1. Fork this project
-2. Create a feature branch
-3. Submit your changes
-4. Initiate a Pull Request
+- New Windows `termsrv.dll` layouts
+- x86/x64 regression samples
+- ARM64 support
+- Symbol-free location strategies
+- IDA version compatibility fixes
 
-## Related Resources
+When reporting a failure, include:
 
-- [RDP Wrapper Project](https://github.com/stascorp/rdpwrap)
-- [IDA Pro Official Website](https://www.hex-rays.com/products/ida/index.shtml)
+- The complete `termsrv.dll` version
+- Architecture: x86 or x64
+- IDA Pro version
+- Complete plugin output
+- Publicly shareable disassembly snippets or symbol information
+
+Do not upload proprietary Microsoft DLLs or files you are not authorized to redistribute.
+
+## Acknowledgements
+
+- [llccd/RDPWrapOffsetFinder](https://github.com/llccd/RDPWrapOffsetFinder) — reference offset-matching logic
+- [stascorp/rdpwrap](https://github.com/stascorp/rdpwrap) — original RDP Wrapper project
+- [Hex-Rays IDAPython](https://python.docs.hex-rays.com/) — IDA Python API
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ## Disclaimer
 
-This tool is for learning and research purposes only. Users are responsible for any risks and liabilities arising from the use of this tool.
+This project is intended for security research, compatibility analysis, and education. You are responsible for complying with applicable laws, software license terms, and organizational security policies. The authors are not liable for data loss, system failures, service disruption, or other damage resulting from generated configurations or subsequent system modifications.
