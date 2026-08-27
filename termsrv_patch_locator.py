@@ -5,26 +5,32 @@ import ctypes
 import datetime
 import fnmatch
 import os
+import re
 from ctypes import wintypes
 
 import ida_funcs
 import ida_ida
 import ida_idaapi
 import ida_idp
+import ida_lines
 import ida_nalt
 import ida_ua
 import idautils
 import idc
 
-from termsrv_patch_core import (
+from termsrv_patch_locator.core import (
     Instruction,
     Operand,
+    PatchMatch,
     locate_def_policy,
+    locate_def_policy_arm64,
     locate_local_only,
+    locate_local_only_arm64,
     locate_single_user,
+    locate_single_user_arm64,
     uses_win8_cp_policy,
 )
-from termsrv_patch_output import (
+from termsrv_patch_locator.output import (
     format_patch_block,
     format_slinit_hook,
     format_slinit_section,
@@ -117,9 +123,18 @@ def get_imagebase():
 
 
 def get_arch():
-    if hasattr(ida_ida, "inf_is_32bit_exactly"):
-        return "x86" if ida_ida.inf_is_32bit_exactly() else "x64"
-    return "x86" if ida_idaapi.get_inf_structure().is_32bit() else "x64"
+    if hasattr(ida_ida, "inf_get_procname"):
+        processor = ida_ida.inf_get_procname().lower()
+    else:
+        processor = ida_idaapi.get_inf_structure().procname.lower()
+    if hasattr(ida_ida, "inf_get_app_bitness"):
+        bitness = ida_ida.inf_get_app_bitness()
+    else:
+        info = ida_idaapi.get_inf_structure()
+        bitness = 64 if info.is_64bit() else 32 if info.is_32bit() else 16
+    if processor in ("arm", "armb"):
+        return "arm64" if bitness == 64 else "arm"
+    return "x64" if bitness == 64 else "x86"
 
 
 def _short_demangle_mask():
@@ -158,12 +173,18 @@ def find_func_ea(*patterns):
     return matches[0] if matches else None
 
 
-def find_name_ea(*patterns):
+def find_name_eas(*patterns):
     lowered = tuple(pattern.lower() for pattern in patterns)
-    for ea, name in idautils.Names():
-        if name and any(fnmatch.fnmatch(name.lower(), pattern) for pattern in lowered):
-            return ea
-    return ida_idaapi.BADADDR
+    return {
+        ea
+        for ea, name in idautils.Names()
+        if name and any(fnmatch.fnmatch(name.lower(), pattern) for pattern in lowered)
+    }
+
+
+def find_name_ea(*patterns):
+    matches = find_name_eas(*patterns)
+    return next(iter(matches), ida_idaapi.BADADDR)
 
 
 def find_var_ea(name):
@@ -174,12 +195,15 @@ def find_var_ea(name):
     return None
 
 
-def _register_name(reg, dtype):
+def _register_name(reg, dtype=None, address=False):
     if reg is None or reg < 0:
         return None
-    width = ida_ua.get_dtype_size(dtype)
-    if width <= 0:
-        width = 8 if get_arch() == "x64" else 4
+    if address:
+        width = 8 if get_arch() in ("x64", "arm64") else 4
+    else:
+        width = ida_ua.get_dtype_size(dtype) if dtype is not None else 0
+        if width <= 0:
+            width = 8 if get_arch() in ("x64", "arm64") else 4
     return ida_idp.get_reg_name(reg, width)
 
 
@@ -188,9 +212,15 @@ def _operand(insn, op):
         return Operand("reg", reg=_register_name(op.reg, op.dtype))
     if op.type == ida_ua.o_imm:
         return Operand("imm", value=op.value)
-    if op.type in (ida_ua.o_mem, ida_ua.o_phrase, ida_ua.o_displ):
-        base = _register_name(op.reg, op.dtype) if op.type != ida_ua.o_mem else None
-        return Operand("mem", base=base, displacement=op.addr, target=op.addr)
+    if op.type in (ida_ua.o_phrase, ida_ua.o_displ):
+        return Operand(
+            "mem",
+            base=_register_name(op.phrase, address=True),
+            displacement=op.addr,
+            target=op.addr,
+        )
+    if op.type == ida_ua.o_mem:
+        return Operand("mem", displacement=op.addr, target=op.addr)
     if op.type in (ida_ua.o_near, ida_ua.o_far):
         return Operand("near", target=op.addr)
     return Operand("void")
@@ -201,7 +231,13 @@ def decode_instruction(ea):
     if not insn:
         return None
     operands = tuple(_operand(insn, op) for op in insn.ops if op.type != ida_ua.o_void)
-    return Instruction(ea, insn.size, idc.print_insn_mnem(ea).lower(), operands)
+    mnemonic = idc.print_insn_mnem(ea).lower()
+    if get_arch() == "arm64" and mnemonic == "b":
+        line = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0) or "")
+        displayed = line.strip().split(None, 1)
+        if displayed and displayed[0].lower().startswith("b."):
+            mnemonic = displayed[0].lower()
+    return Instruction(ea, insn.size, mnemonic, operands)
 
 
 def collect_function(ea, max_bytes=None):
@@ -233,6 +269,11 @@ def _call_target_candidates(ea):
         source = decode_instruction(xref.frm)
         if source and source.mnemonic == "jmp":
             candidates.add(xref.frm)
+            continue
+        if get_arch() == "arm64":
+            function = ida_funcs.get_func(xref.frm)
+            if function and function.end_ea - function.start_ea <= 16:
+                candidates.add(function.start_ea)
     return candidates
 
 
@@ -245,45 +286,176 @@ def _first_match(matcher, instruction_sets, *args):
 
 
 def patch_single_user():
-    memset_ea = find_func_ea("memset")
-    if memset_ea is None:
-        memset_ea = find_name_ea("memset", "_memset", "__imp_memset", "__imp__memset@*")
-    if memset_ea in (None, ida_idaapi.BADADDR):
+    arch = get_arch()
+    if arch == "arm":
+        return ["ERROR: SingleUserPatch ARM32 is not supported"]
+    memset_symbols = set(find_func_eas("memset"))
+    memset_symbols.update(find_name_eas(
+        "memset", "memset_0", "_memset", "__imp_memset", "__imp__memset@*"
+    ))
+    if not memset_symbols:
         return ["ERROR: memset not found"]
 
-    verify_ea = find_name_ea("__imp_verifyversioninfow", "__imp__verifyversioninfow@*")
-    verify_targets = _call_target_candidates(verify_ea) if verify_ea != ida_idaapi.BADADDR else {None}
-    memset_targets = _call_target_candidates(memset_ea)
+    verify_symbols = find_name_eas(
+        "verifyversioninfow",
+        "_verifyversioninfow",
+        "verifyversioninfow_0",
+        "_verifyversioninfow_0",
+        "__imp_verifyversioninfow",
+        "__imp__verifyversioninfow@*",
+    )
+    verify_targets = set()
+    for ea in verify_symbols:
+        verify_targets.update(_call_target_candidates(ea))
+    memset_targets = set()
+    for ea in memset_symbols:
+        memset_targets.update(_call_target_candidates(ea))
 
     functions = []
+    seen_functions = set()
     for pattern in (
         "csessionarbitrationhelper::issinglesessionperuserenabled",
         "cutils::issinglesessionperuser",
     ):
-        ea = find_func_ea(pattern)
-        if ea is not None:
-            functions.append(collect_function(ea, 256))
+        for ea in find_func_eas(pattern):
+            if ea not in seen_functions:
+                functions.append(collect_function(ea, 256))
+                seen_functions.add(ea)
 
     for instructions in functions:
+        if arch == "arm64":
+            match = locate_single_user_arm64(
+                instructions, get_imagebase(), memset_targets, verify_targets - {None}
+            )
+            if match:
+                return match.ini_lines(arch)
+            continue
         for memset_target in memset_targets:
             for verify_target in verify_targets:
                 match = locate_single_user(
-                    instructions, get_arch(), get_imagebase(), memset_target, verify_target
+                    instructions, arch, get_imagebase(), memset_target, verify_target
                 )
                 if match:
-                    return match.ini_lines(get_arch())
+                    return match.ini_lines(arch)
     return ["ERROR: SingleUserPatch pattern not found"]
 
 
+def _normalize_arm_operand(ea, index):
+    return re.sub(r"\s+", "", idc.print_operand(ea, index).lower())
+
+
+def locate_def_policy_arm64_ida(ea, max_bytes=128):
+    """Fallback for IDA ARM64 operand encodings that do not map cleanly to op_t."""
+    function = ida_funcs.get_func(ea)
+    if not function:
+        return None
+    end = min(function.end_ea, ea + max_bytes)
+    cursor = ea
+    while cursor + 12 < end:
+        if idc.print_insn_mnem(cursor).lower() != "add":
+            cursor += 4
+            continue
+
+        add_dst = _normalize_arm_operand(cursor, 0)
+        add_base = _normalize_arm_operand(cursor, 1)
+        add_imm = _normalize_arm_operand(cursor, 2)
+        debug_log(
+            "[DefPolicy ARM64 text] 0x{:X}: add {}, {}, {}".format(
+                cursor, add_dst, add_base, add_imm
+            )
+        )
+        if not re.fullmatch(r"x(?:[12]?\d|30)", add_dst):
+            cursor += 4
+            continue
+        if not re.fullmatch(r"x(?:[12]?\d|30)", add_base):
+            cursor += 4
+            continue
+        try:
+            immediate_text = add_imm.lstrip("#")
+            immediate = (
+                int(immediate_text[:-1], 16)
+                if immediate_text.endswith("h")
+                else int(immediate_text, 0)
+            )
+        except ValueError:
+            cursor += 4
+            continue
+        if immediate != 0x638:
+            cursor += 4
+            continue
+
+        load_ea, compare_ea, branch_ea = cursor + 4, cursor + 8, cursor + 12
+        if idc.print_insn_mnem(load_ea).lower() != "ldp":
+            cursor += 4
+            continue
+        reg1 = _normalize_arm_operand(load_ea, 0)
+        reg_other = _normalize_arm_operand(load_ea, 1)
+        load_mem = _normalize_arm_operand(load_ea, 2)
+        if not re.fullmatch(r"w(?:[12]?\d|30)", reg1):
+            cursor += 4
+            continue
+        if not re.fullmatch(r"w(?:[12]?\d|30)", reg_other):
+            cursor += 4
+            continue
+        if load_mem and add_dst not in load_mem:
+            cursor += 4
+            continue
+
+        if idc.print_insn_mnem(compare_ea).lower() != "cmp":
+            cursor += 4
+            continue
+        compared = {
+            _normalize_arm_operand(compare_ea, 0),
+            _normalize_arm_operand(compare_ea, 1),
+        }
+        if compared != {reg1, reg_other}:
+            cursor += 4
+            continue
+
+        branch_line = ida_lines.tag_remove(idc.generate_disasm_line(branch_ea, 0) or "")
+        branch_token = branch_line.strip().split(None, 1)[0].lower().replace(".", "") if branch_line.strip() else ""
+        if branch_token not in ("beq", "bne"):
+            cursor += 4
+            continue
+        suffix = "_b" if branch_token == "bne" else ""
+        debug_log(
+            "[DefPolicy ARM64 text] matched 0x{:X}: {}, {}, {}, {}".format(
+                cursor, reg1, reg_other, add_base, branch_token
+            )
+        )
+        return PatchMatch(
+            "DefPolicy",
+            cursor - get_imagebase(),
+            "CDefPolicy_Query_{}_{}{}".format(reg1, add_base, suffix),
+        )
+    return None
+
+
 def patch_def_policy():
-    ea = find_func_ea("cdefpolicy::query")
-    if ea is None:
+    arch = get_arch()
+    if arch == "arm":
+        return ["ERROR: DefPolicyPatch ARM32 is not supported"]
+    candidates = find_func_eas("cdefpolicy::query")
+    if not candidates:
         return ["ERROR: CDefPolicy::Query not found"]
-    match = locate_def_policy(collect_function(ea, 128), get_arch(), get_imagebase())
-    return match.ini_lines(get_arch()) if match else ["ERROR: DefPolicyPatch pattern not found"]
+    for ea in candidates:
+        instructions = collect_function(ea, 128)
+        match = (
+            locate_def_policy_arm64(instructions, get_imagebase())
+            if arch == "arm64"
+            else locate_def_policy(instructions, arch, get_imagebase())
+        )
+        if arch == "arm64" and not match:
+            match = locate_def_policy_arm64_ida(ea, 128)
+        if match:
+            return match.ini_lines(arch)
+    return ["ERROR: DefPolicyPatch pattern not found"]
 
 
 def patch_local_only():
+    arch = get_arch()
+    if arch == "arm":
+        return ["ERROR: LocalOnlyPatch ARM32 is not supported"]
     callers = find_func_eas("cenforcementcore::getinstanceoftslicense")
     targets = find_func_eas(
         "cslquery::islicensetypelocalonly", "cslquery::isterminaltypelocalonly"
@@ -296,11 +468,14 @@ def patch_local_only():
         target_candidates.update(_call_target_candidates(target))
 
     for caller in callers:
-        match = locate_local_only(
-            collect_function(caller), get_arch(), get_imagebase(), target_candidates
+        instructions = collect_function(caller)
+        match = (
+            locate_local_only_arm64(instructions, get_imagebase(), target_candidates)
+            if arch == "arm64"
+            else locate_local_only(instructions, arch, get_imagebase(), target_candidates)
         )
         if match:
-            return match.ini_lines(get_arch())
+            return match.ini_lines(arch)
     return ["ERROR: LocalOnlyPatch pattern not found"]
 
 

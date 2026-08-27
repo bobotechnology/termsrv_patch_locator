@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/github/license/bobotechnology/termsrv_patch_locator?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![IDA Pro](https://img.shields.io/badge/IDA%20Pro-7.0--9.x-5C2D91?style=flat-square)](https://hex-rays.com/ida-pro)
-[![Architecture](https://img.shields.io/badge/arch-x86%20%7C%20x64-informational?style=flat-square)](#兼容性)
+[![Architecture](https://img.shields.io/badge/arch-x86%20%7C%20x64%20%7C%20ARM64-informational?style=flat-square)](#兼容性)
 
 [English](README_EN.md) · [快速开始](#快速开始) · [工作原理](#工作原理) · [常见问题](#常见问题)
 
@@ -24,7 +24,7 @@ Termsrv Patch Locator 是一个面向逆向分析与配置维护的 IDAPython �
 
 ## 特性
 
-- **自动识别目标**：读取 DLL 文件版本并判断 x86/x64 架构。
+- **自动识别目标**：读取 DLL 文件版本并判断 x86、x64 或 ARM64 架构。
 - **定位核心补丁**：支持 SingleUser、DefPolicy、LocalOnly、SLPolicy 和 SLInit。
 - **生成 RDP Wrapper 配置**：输出补丁 RVA、补丁代码名称及 SLInit 变量地址。
 - **兼容多种指令布局**：处理 DefPolicy 寄存器切换以及 LocalOnly 的 `js`/`jns` 控制流。
@@ -40,7 +40,7 @@ Termsrv Patch Locator 是一个面向逆向分析与配置维护的 IDAPython �
 - IDA 内置的 Python 3 环境
 - 目标系统的 `termsrv.dll`
 - 与 DLL 完全匹配的 PDB 符号
-- Windows x86 或 x64 目标文件
+- Windows x86、x64 或 ARM64 目标文件
 
 ### 安装
 
@@ -51,13 +51,18 @@ git clone https://github.com/bobotechnology/termsrv_patch_locator.git
 cd termsrv_patch_locator
 ```
 
-将以下三个文件复制到 IDA 的 `plugins` 目录，且保持它们位于同一目录：
+将主插件文件和辅助模块目录复制到 IDA 的 `plugins` 目录：
 
 ```text
-termsrv_patch_locator.py
-termsrv_patch_core.py
-termsrv_patch_output.py
+plugins/
+├─ termsrv_patch_locator.py
+└─ termsrv_patch_locator/
+   ├─ __init__.py
+   ├─ core.py
+   └─ output.py
 ```
+
+> 不要把 `core.py` 或 `output.py` 单独放在 `plugins` 根目录；IDA 会把根目录中的每个 `.py` 文件当作独立插件并尝试调用 `PLUGIN_ENTRY()`。
 
 常见插件目录示例：
 
@@ -144,8 +149,8 @@ IDA 数据库
 | 文件 | 职责 |
 |---|---|
 | `termsrv_patch_locator.py` | IDA 插件入口、符号查找、指令适配、版本读取和 INI 输出 |
-| `termsrv_patch_core.py` | 与 IDA 解耦的指令模型，以及各类补丁匹配器 |
-| `termsrv_patch_output.py` | 版本段字段顺序和 SLInit 对齐格式 |
+| `termsrv_patch_locator/core.py` | 与 IDA 解耦的指令模型，以及各类补丁匹配器 |
+| `termsrv_patch_locator/output.py` | 版本段字段顺序和 SLInit 对齐格式 |
 
 这种结构使匹配逻辑可以在普通 Python 环境中回归测试，同时保留 IDA 负责反汇编和符号解析的优势。
 
@@ -158,11 +163,12 @@ IDA 数据库
 | IDA Pro 9.x | 支持 |
 | x86 `termsrv.dll` | 支持 |
 | x64 `termsrv.dll` | 支持 |
-| ARM64 | 暂不支持 |
+| ARM64 `termsrv.dll` | 实验性支持 |
+| ARM32 `termsrv.dll` | 暂不支持 |
 | 无 PDB 分析 | 暂不支持 |
 | 自动修改 DLL | 不提供 |
 
-参考项目中的 ARM64 和无符号扫描尚未移植。当前版本依赖 PDB 中的函数与全局变量符号。
+ARM64 的 SingleUser、DefPolicy 和 LocalOnly 匹配参考 `RDPWrapOffsetFinder/PatchARM64.cpp`，当前标记为实验性。SLInit 地址仍依赖 PDB 符号。ARM32 和无符号扫描尚未实现。
 
 ## 开发与测试
 
@@ -175,7 +181,7 @@ python -m unittest discover -s tests -v
 运行语法检查：
 
 ```powershell
-python -m py_compile termsrv_patch_core.py termsrv_patch_output.py termsrv_patch_locator.py tests/test_patch_core.py tests/test_patch_output.py
+python -m py_compile termsrv_patch_locator.py termsrv_patch_locator/core.py termsrv_patch_locator/output.py tests/test_patch_core.py tests/test_patch_output.py
 ```
 
 测试覆盖当前核心匹配路径，包括：
@@ -191,7 +197,7 @@ python -m py_compile termsrv_patch_core.py termsrv_patch_output.py termsrv_patch
 
 ### 插件没有出现在菜单中
 
-确认三个 Python 文件均位于 IDA 的插件搜索目录中，并检查 IDA 输出窗口是否出现模块导入异常。缺少 `termsrv_patch_core.py` 或 `termsrv_patch_output.py` 都会导致插件加载失败。
+确认 `termsrv_patch_locator.py` 与 `termsrv_patch_locator/` 子目录均位于 IDA 插件目录中。检查 IDA 输出窗口中的导入错误。若根目录仍残留旧版 `termsrv_patch_core.py` 或 `termsrv_patch_output.py`，请删除它们；IDA 会把这些文件误当成独立插件。
 
 ### 提示 `memset not found`
 

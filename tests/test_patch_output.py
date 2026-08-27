@@ -1,6 +1,6 @@
 import unittest
 
-from termsrv_patch_output import (
+from termsrv_patch_locator.output import (
     format_patch_block,
     format_slinit_hook,
     format_slinit_section,

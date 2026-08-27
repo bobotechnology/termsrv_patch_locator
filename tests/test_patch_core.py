@@ -1,11 +1,14 @@
 import unittest
 
-from termsrv_patch_core import (
+from termsrv_patch_locator.core import (
     Instruction,
     Operand,
     locate_def_policy,
+    locate_def_policy_arm64,
     locate_local_only,
+    locate_local_only_arm64,
     locate_single_user,
+    locate_single_user_arm64,
     uses_win8_cp_policy,
 )
 
@@ -126,6 +129,121 @@ class LocalOnlyTests(unittest.TestCase):
         ]
         match = locate_local_only(instructions, "x64", BASE, BASE + 0x900)
         self.assertEqual((match.offset, match.code), (0x623, "nopjmp"))
+
+
+class Arm64Tests(unittest.TestCase):
+    def test_single_user(self):
+        instructions = [
+            insn(0x900, 4, "bl", near(BASE + 0xA00)),
+            insn(0x904, 4, "mov", reg("x1"), reg("x0")),
+            insn(0x908, 4, "bl", near(BASE + 0xB00)),
+        ]
+        match = locate_single_user_arm64(
+            instructions, BASE, {BASE + 0xA00}, {BASE + 0xB00}
+        )
+        self.assertEqual((match.offset, match.code), (0x908, "MovX0_1"))
+
+    def test_single_user_26100_sequence(self):
+        instructions = [
+            insn(0x14B890, 4, "mov", reg("w19"), imm(0)),
+            insn(0x14B894, 4, "mov", reg("w20"), imm(1)),
+            insn(0x14B898, 4, "bl", near(BASE + 0x220000)),
+            insn(0x14B89C, 4, "mov", reg("w8"), imm(0x11C)),
+            insn(0x14B8BC, 4, "bl", near(BASE + 0x221000)),
+            insn(0x14B8C0, 4, "mov", reg("w1"), imm(0x40)),
+            insn(0x14B8C4, 4, "mov", reg("x2"), reg("x0")),
+            insn(0x14B8C8, 4, "add", reg("x0"), reg("sp"), imm(0x48)),
+            insn(0x14B8CC, 4, "bl", near(BASE + 0x222000)),
+            insn(0x14B8D0, 4, "cbz", reg("w0"), near(BASE + 0x14BA34)),
+        ]
+        match = locate_single_user_arm64(
+            instructions, BASE, {BASE + 0x220000}, {BASE + 0x222000}
+        )
+        self.assertEqual((match.offset, match.code), (0x14B8CC, "MovX0_1"))
+
+    def test_def_policy_26100_sequence(self):
+        instructions = [
+            insn(0x872F8, 4, "ldr", reg("w4"), mem("x20", 0x644)),
+            insn(0x87300, 4, "add", reg("x17"), reg("x20"), imm(0x638)),
+            insn(0x87304, 4, "ldp", reg("w3"), reg("w2"), mem("x17", 0)),
+            insn(0x87308, 4, "adrp", reg("x8"), imm(0x1B6000)),
+            insn(0x8730C, 4, "add", reg("x1"), reg("x8"), imm(0xDA0)),
+            insn(0x87310, 4, "mov", reg("w0"), imm(1)),
+            insn(0x87314, 4, "mov", reg("w21"), imm(0)),
+            insn(0x87318, 4, "bl", near(BASE + 0x8B4B8)),
+            insn(0x8731C, 4, "ldr", reg("w8"), mem("x20", 0x644)),
+            insn(0x87320, 4, "str", reg("w8"), mem("x22", 0)),
+            insn(0x87324, 4, "add", reg("x17"), reg("x20"), imm(0x638)),
+            insn(0x87328, 4, "ldp", reg("w3"), reg("w2"), mem("x17", 0)),
+            insn(0x8732C, 4, "cmp", reg("w2"), reg("w3")),
+            insn(0x87330, 4, "b.ne", near(BASE + 0x87348)),
+        ]
+        match = locate_def_policy_arm64(instructions, BASE)
+        self.assertEqual(
+            (match.offset, match.code), (0x87324, "CDefPolicy_Query_w3_x20_b")
+        )
+
+    def test_def_policy_26100_ida_missing_ldp_base(self):
+        instructions = [
+            insn(0x87324, 4, "add", reg("x17"), reg("x20"), imm(0x638)),
+            insn(0x87328, 4, "ldp", reg("w3"), reg("w2"), Operand("mem")),
+            insn(0x8732C, 4, "cmp", reg("w2"), reg("w3")),
+            insn(0x87330, 4, "B.NE", near(BASE + 0x87348)),
+        ]
+        match = locate_def_policy_arm64(instructions, BASE)
+        self.assertEqual(
+            (match.offset, match.code), (0x87324, "CDefPolicy_Query_w3_x20_b")
+        )
+
+    def test_def_policy_w9_x8_example(self):
+        instructions = [
+            insn(0x877AC, 4, "add", reg("x17"), reg("x8"), imm(0x638)),
+            insn(0x877B0, 4, "ldp", reg("w9"), reg("w8"), mem("x17", 0)),
+            insn(0x877B4, 4, "cmp", reg("w8"), reg("w9")),
+            insn(0x877B8, 4, "B.NE", near(BASE + 0x877D0)),
+        ]
+        match = locate_def_policy_arm64(instructions, BASE)
+        self.assertEqual(
+            (match.offset, match.code), (0x877AC, "CDefPolicy_Query_w9_x8_b")
+        )
+
+    def test_def_policy_ldr_layout(self):
+        instructions = [
+            insn(0xA00, 4, "ldr", reg("w9"), mem("x19", 0x638)),
+            insn(0xA04, 4, "ldr", reg("w10"), mem("x19", 0x63C)),
+            insn(0xA08, 4, "cmp", reg("w10"), reg("w9")),
+            insn(0xA0C, 4, "b.ne", near(BASE + 0xA30)),
+        ]
+        match = locate_def_policy_arm64(instructions, BASE)
+        self.assertEqual(
+            (match.offset, match.code), (0xA00, "CDefPolicy_Query_w9_x19_b")
+        )
+
+    def test_def_policy_ldp_layout(self):
+        instructions = [
+            insn(0xB00, 4, "add", reg("x8"), reg("x20"), imm(0x638)),
+            insn(0xB04, 4, "ldp", reg("w11"), reg("w12"), mem("x8", 0)),
+            insn(0xB08, 4, "cmp", reg("w11"), reg("w12")),
+            insn(0xB0C, 4, "b.eq", near(BASE + 0xB30)),
+        ]
+        match = locate_def_policy_arm64(instructions, BASE)
+        self.assertEqual(
+            (match.offset, match.code), (0xB00, "CDefPolicy_Query_w11_x20")
+        )
+
+    def test_local_only(self):
+        target = BASE + 0xC40
+        instructions = [
+            insn(0xC00, 4, "bl", near(BASE + 0xD00)),
+            insn(0xC04, 4, "mov", reg("w8"), reg("w0")),
+            insn(0xC08, 4, "tbnz", reg("w8"), imm(31), near(target)),
+            insn(0xC0C, 4, "ldr", reg("w9"), mem("x20", 0)),
+            insn(0xC10, 4, "cbz", reg("w9"), near(target)),
+        ]
+        match = locate_local_only_arm64(
+            instructions, BASE, {BASE + 0xD00}
+        )
+        self.assertEqual((match.offset, match.code), (0xC10, "B_48"))
 
 
 class SLPolicyTests(unittest.TestCase):

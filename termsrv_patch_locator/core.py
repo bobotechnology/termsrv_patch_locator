@@ -216,6 +216,122 @@ def locate_local_only(
     return None
 
 
+def _register_number(name: Optional[str]) -> Optional[int]:
+    if not name or len(name) < 2 or name[0] not in ("w", "x"):
+        return None
+    return int(name[1:]) if name[1:].isdigit() else None
+
+
+def locate_single_user_arm64(
+    instructions: Sequence[Instruction],
+    image_base: int,
+    memset_targets: Set[int],
+    verify_version_targets: Set[int],
+) -> Optional[PatchMatch]:
+    """Experimental ARM64 SingleUser matcher based on PatchARM64.cpp."""
+    for index, insn in enumerate(instructions):
+        if insn.mnemonic != "bl" or insn.operand(0).target not in memset_targets:
+            continue
+        for candidate in instructions[index + 1 :]:
+            if (
+                candidate.mnemonic in ("bl", "blr")
+                and candidate.operand(0).target in verify_version_targets
+            ):
+                return PatchMatch("SingleUser", candidate.ea - image_base, "MovX0_1")
+        break
+    return None
+
+
+def locate_def_policy_arm64(
+    instructions: Sequence[Instruction], image_base: int
+) -> Optional[PatchMatch]:
+    """Experimental ARM64 DefPolicy matcher for 0x638/0x63c layouts."""
+    for index, insn in enumerate(instructions):
+        first0, first1 = insn.operand(0), insn.operand(1)
+        reg1 = reg2 = compare_reg = None
+
+        if (
+            insn.mnemonic == "add"
+            and _is_register(first0)
+            and _is_register(first1)
+            and insn.operand(2).kind == "imm"
+            and insn.operand(2).value == 0x638
+            and index + 2 < len(instructions)
+        ):
+            load = instructions[index + 1]
+            if load.mnemonic != "ldp":
+                continue
+            load_base = load.operand(2).base
+            if load_base is not None and load_base != first0.reg:
+                continue
+            reg1 = load.operand(0).reg
+            compare_reg = load.operand(1).reg
+            reg2 = first1.reg
+        elif (
+            insn.mnemonic == "ldr"
+            and _is_register(first0)
+            and _is_memory(first1, 0x638)
+            and index + 2 < len(instructions)
+        ):
+            load = instructions[index + 1]
+            if load.mnemonic != "ldr" or not _is_memory(load.operand(1), 0x63C):
+                continue
+            if load.operand(1).base != first1.base:
+                continue
+            reg1, compare_reg, reg2 = first0.reg, load.operand(0).reg, first1.base
+        else:
+            continue
+
+        compare = instructions[index + 2]
+        if compare.mnemonic != "cmp":
+            continue
+        compared = {compare.operand(0).reg, compare.operand(1).reg}
+        if compared != {reg1, compare_reg}:
+            continue
+        if index + 3 >= len(instructions):
+            continue
+        branch = instructions[index + 3].mnemonic.lower().replace(".", "").replace(" ", "")
+        if branch not in ("beq", "bne"):
+            continue
+        suffix = "_b" if branch == "bne" else ""
+        reg1_number = _register_number(reg1)
+        reg2_number = _register_number(reg2)
+        if reg1_number is None or reg2_number is None:
+            continue
+        return PatchMatch(
+            "DefPolicy",
+            insn.ea - image_base,
+            f"CDefPolicy_Query_w{reg1_number}_x{reg2_number}{suffix}",
+        )
+    return None
+
+
+def locate_local_only_arm64(
+    instructions: Sequence[Instruction],
+    image_base: int,
+    license_check_targets: Set[int],
+) -> Optional[PatchMatch]:
+    """Experimental ARM64 LocalOnly matcher based on BL/TBNZ/CBZ flow."""
+    for index, insn in enumerate(instructions):
+        if insn.mnemonic != "bl" or insn.operand(0).target not in license_check_targets:
+            continue
+        tbnz_index = next(
+            (i for i in range(index + 1, len(instructions)) if instructions[i].mnemonic == "tbnz"),
+            None,
+        )
+        if tbnz_index is None:
+            break
+        target = instructions[tbnz_index].operand(2).target
+        for candidate in instructions[tbnz_index + 1 :]:
+            if candidate.mnemonic == "cbz" and candidate.operand(1).target == target:
+                displacement = target - candidate.ea
+                return PatchMatch(
+                    "LocalOnly", candidate.ea - image_base, f"B_{displacement}"
+                )
+        break
+    return None
+
+
 def uses_win8_cp_policy(instructions: Iterable[Instruction], arch: str) -> bool:
     if arch != "x86":
         return False

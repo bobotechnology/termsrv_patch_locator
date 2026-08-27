@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/github/license/bobotechnology/termsrv_patch_locator?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![IDA Pro](https://img.shields.io/badge/IDA%20Pro-7.0--9.x-5C2D91?style=flat-square)](https://hex-rays.com/ida-pro)
-[![Architecture](https://img.shields.io/badge/arch-x86%20%7C%20x64-informational?style=flat-square)](#compatibility)
+[![Architecture](https://img.shields.io/badge/arch-x86%20%7C%20x64%20%7C%20ARM64-informational?style=flat-square)](#compatibility)
 
 [简体中文](README.md) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Troubleshooting](#troubleshooting)
 
@@ -24,7 +24,7 @@ The matching logic follows the x86/x64 implementation in [llccd/RDPWrapOffsetFin
 
 ## Features
 
-- **Automatic target detection** — reads the DLL version and identifies x86 or x64.
+- **Automatic target detection** — reads the DLL version and identifies x86, x64, or ARM64.
 - **Core patch location** — supports SingleUser, DefPolicy, LocalOnly, SLPolicy, and SLInit.
 - **RDP Wrapper configuration output** — emits patch RVAs, patch code names, and SLInit variable addresses.
 - **Multiple instruction layouts** — handles DefPolicy register changes and both `js`/`jns` LocalOnly control-flow forms.
@@ -40,7 +40,7 @@ The matching logic follows the x86/x64 implementation in [llccd/RDPWrapOffsetFin
 - The Python 3 environment bundled with IDA
 - A target `termsrv.dll`
 - PDB symbols that exactly match the DLL
-- An x86 or x64 Windows target
+- An x86, x64, or ARM64 Windows target
 
 ### Installation
 
@@ -51,13 +51,18 @@ git clone https://github.com/bobotechnology/termsrv_patch_locator.git
 cd termsrv_patch_locator
 ```
 
-Copy all three files below into an IDA `plugins` directory. They must remain in the same directory:
+Copy the main plugin file and helper package into an IDA `plugins` directory:
 
 ```text
-termsrv_patch_locator.py
-termsrv_patch_core.py
-termsrv_patch_output.py
+plugins/
+├─ termsrv_patch_locator.py
+└─ termsrv_patch_locator/
+   ├─ __init__.py
+   ├─ core.py
+   └─ output.py
 ```
+
+> Do not place `core.py` or `output.py` directly in the `plugins` root. IDA treats every root-level `.py` file as a separate plugin and attempts to call `PLUGIN_ENTRY()`.
 
 Common plugin directory examples:
 
@@ -144,8 +149,8 @@ The project consists of two primary modules:
 | File | Responsibility |
 |---|---|
 | `termsrv_patch_locator.py` | IDA plugin entry point, symbol lookup, instruction adapter, version detection, and INI output |
-| `termsrv_patch_core.py` | IDA-independent instruction model and patch matchers |
-| `termsrv_patch_output.py` | Version-section field ordering and aligned SLInit formatting |
+| `termsrv_patch_locator/core.py` | IDA-independent instruction model and patch matchers |
+| `termsrv_patch_locator/output.py` | Version-section field ordering and aligned SLInit formatting |
 
 This design keeps disassembly and symbol resolution in IDA while allowing the matching behavior to be regression-tested in a regular Python environment.
 
@@ -158,11 +163,12 @@ This design keeps disassembly and symbol resolution in IDA while allowing the ma
 | IDA Pro 9.x | Supported |
 | x86 `termsrv.dll` | Supported |
 | x64 `termsrv.dll` | Supported |
-| ARM64 | Not yet supported |
+| ARM64 `termsrv.dll` | Experimental |
+| ARM32 `termsrv.dll` | Not yet supported |
 | Analysis without PDB symbols | Not yet supported |
 | Automatic DLL modification | Not provided |
 
-ARM64 and symbol-free scanning from the reference project have not been ported. The current release depends on function and global-variable symbols from a matching PDB.
+ARM64 SingleUser, DefPolicy, and LocalOnly matching follows `RDPWrapOffsetFinder/PatchARM64.cpp` and is currently experimental. SLInit addresses still depend on PDB symbols. ARM32 and symbol-free scanning are not implemented.
 
 ## Development and Testing
 
@@ -175,7 +181,7 @@ python -m unittest discover -s tests -v
 Run syntax checks:
 
 ```powershell
-python -m py_compile termsrv_patch_core.py termsrv_patch_output.py termsrv_patch_locator.py tests/test_patch_core.py tests/test_patch_output.py
+python -m py_compile termsrv_patch_locator.py termsrv_patch_locator/core.py termsrv_patch_locator/output.py tests/test_patch_core.py tests/test_patch_output.py
 ```
 
 The tests currently cover:
@@ -191,7 +197,7 @@ The tests currently cover:
 
 ### The plugin does not appear in the menu
 
-Make sure all three Python files are in an IDA plugin search directory. Check the IDA Output window for import errors. Missing either `termsrv_patch_core.py` or `termsrv_patch_output.py` will prevent the plugin from loading.
+Make sure `termsrv_patch_locator.py` and the `termsrv_patch_locator/` package directory are both inside the IDA plugins directory. Check the IDA Output window for import errors. Delete obsolete root-level `termsrv_patch_core.py` and `termsrv_patch_output.py` files; IDA will otherwise treat them as separate plugins.
 
 ### `memset not found`
 
